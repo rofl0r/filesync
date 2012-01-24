@@ -230,7 +230,7 @@ static void doFile(stringptr* src, stringptr* dst, struct stat* ss) {
 	}
 	if(ss->st_mtime < sd.st_mtime) {
 		ulz_fprintf(2, "dest is newer than source: %s , %s : %llu , %llu\n", src->ptr, dst->ptr, ss->st_mtime, sd.st_mtime);
-		if(progstate.skipIfNewer) return;
+		if(progstate.skipIfNewer) goto skipper;
 	}
 	if(
 		(progstate.checkFileSize && ss->st_size != sd.st_size) ||
@@ -243,7 +243,7 @@ static void doFile(stringptr* src, stringptr* dst, struct stat* ss) {
 		 * then join em and compare crc and warn and copy if different
 		 */
 	}
-	
+	skipper:
 	progstate.total.skipped += 1;
 }
 
@@ -353,7 +353,7 @@ static void doDir(stringptr* subd) {
 				} else {
 					doFile(file_combined_src, file_combined_dst, &src_stat);
 				}
-			}	
+			}
 			stringptr_free(file_combined_src);
 			stringptr_free(file_combined_dst);
 		}
