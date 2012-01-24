@@ -23,6 +23,7 @@
 #include "../lib/include/filelib.h"
 #include "../lib/include/strlib.h"
 #include "../lib/include/logger.h"
+#include "../lib/include/optparser.h"
 #include "../lib/include/crc32c.h"
 #include <fcntl.h>
 #include <stdio.h>
@@ -47,10 +48,12 @@ typedef struct {
 	totals total;
 	
 	int doChecksum:1;
+	int checkExists:1;
 	int checkChecksum:1;
 	int checkFileSize:1;
 	int checkDate:1;
 	int skipIfNewer:1;
+	int simulate:1;
 } progstate_s;
 
 static progstate_s progstate;
@@ -67,19 +70,33 @@ static void copyDate(stringptr* file, struct stat* st) {
 		log_perror("utime");
 }
 
-//FIXME for some reason, copyDate seems to have no effect on directories
-// maybe another trailing slash issue ?
-static void makeDir(stringptr* src, stringptr* dst) {
-	struct stat ss;
-	if(stat(src->ptr, &ss) == -1) {
-		log_perror("stat");
-		return;
+static void restoreTrailingSlash(stringptr* s) {
+	s->ptr[s->size] = '/';
+	s->size++;
+	s->ptr[s->size] = 0;
+}
+
+static inline int removeTrailingSlash(stringptr* s) {
+	if(isdir(s)) {
+		stringptr_shiftleft(s, 1);
+		return 1;
 	}
-	if(mkdir(dst->ptr, ss.st_mode) == -1) {
+	return 0;
+}
+
+static void updateTimestamp(stringptr* dst, struct stat* ss) {
+	int wasdir = removeTrailingSlash(dst);
+	copyDate(dst, ss);
+	if(wasdir) restoreTrailingSlash(dst);
+}
+
+static void makeDir(stringptr* dst, struct stat* ss) {
+	if(progstate.simulate) 
+		return;
+	if(mkdir(dst->ptr, ss->st_mode) == -1) {
 		log_perror("mkdir");
 		return;
 	}
-	copyDate(dst, &ss);
 }
 
 static char* getMbsString(char* mbs_buf, size_t buf_size, uint64_t bytes, long ms) {
@@ -109,6 +126,13 @@ static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat) {
 	
 	struct timeval starttime;
 	char buf[src_stat->st_blksize];
+	long time_passed;
+	
+	if(progstate.simulate) {
+		crc_result.asInt = 0;
+		time_passed = 0;
+		goto stats;
+	}
 	
 	if((fds = open(src->ptr, O_RDONLY)) == -1) {
 		err_data = src;
@@ -136,7 +160,9 @@ static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat) {
 		err_func = "open";
 		goto error;
 	};
-
+	
+	// we always compute the CRC, because it's nearly "for free",
+	// since the file has to be read anyway.
 	CRC32C_Init(&crc);
 	gettimestamp(&starttime);
 	while(done < (uint64_t) src_stat->st_size) {
@@ -172,12 +198,16 @@ static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat) {
 	char crc_str[16];
 	char mbs_str[64];
 	CRC32C_Final(crc_result.asChar, &crc);
+	
+	time_passed = mspassed(&starttime);
+	
+	stats:
 	ulz_snprintf(crc_str, sizeof(crc_str), "%.8x", htonl(crc_result.asInt));
 	
 	// we do not use printf because it has a limited buffer size
 	log_put(1, VARISL("CRC: "), VARIC(crc_str), VARISL(", "), 
 		VARIS(src), VARISL(" -> "), VARIS(dst), 
-		VARISL(" @"), VARIC(getMbsString(mbs_str, sizeof(mbs_str), src_stat->st_size, mspassed(&starttime))), NULL);
+		VARISL(" @"), VARIC(getMbsString(mbs_str, sizeof(mbs_str), src_stat->st_size, time_passed)), NULL);
 	
 	progstate.total.copied += src_stat->st_size;
 	progstate.total.copies += 1;
@@ -188,7 +218,8 @@ static void doFile(stringptr* src, stringptr* dst, struct stat* ss) {
 	if(stat(dst->ptr, &sd) == -1) {
 		switch(errno) {
 			case ENOENT:
-				doSync(src, dst, ss);
+				if(progstate.checkExists)
+					doSync(src, dst, ss);
 				return;
 			default:
 				log_puts(2, dst);
@@ -216,10 +247,15 @@ static void doFile(stringptr* src, stringptr* dst, struct stat* ss) {
 	progstate.total.skipped += 1;
 }
 
-static void restoreTrailingSlash(stringptr* s) {
-	s->ptr[s->size] = '/';
-	s->size++;
-	s->ptr[s->size] = 0;
+static void setLinkTimestamp(stringptr* link, struct stat* ss) {
+	struct timeval tv[2];
+	tv[0].tv_sec  = ss->st_atime;
+	tv[0].tv_usec = ss->st_atim.tv_nsec / 1000;
+	tv[1].tv_sec  = ss->st_mtime;
+	tv[1].tv_usec = ss->st_mtim.tv_nsec / 1000;
+	if(lutimes(link->ptr, tv) == -1) {
+		log_perror("lutimes");
+	}
 }
 
 // FIXME dont copy symlink if the target is equal
@@ -228,7 +264,10 @@ static void doLink(stringptr* src, stringptr* dst, struct stat* ss) {
 	char buf[4096 + 1];
 	int wasdir = 0;
 	struct stat sd;
-	ssize_t ret = readlink(src->ptr, buf, sizeof(buf) - 1);
+	ssize_t ret;
+	if(progstate.simulate) goto skip;
+	
+	ret = readlink(src->ptr, buf, sizeof(buf) - 1);
 	if(ret == -1) {
 		log_puts(2, src);
 		log_puts(2, SPL(" "));
@@ -242,10 +281,7 @@ static void doLink(stringptr* src, stringptr* dst, struct stat* ss) {
 	}
 	buf[ret] = 0;
 	
-	if(isdir(dst)) {
-		stringptr_shiftleft(dst, 1);
-		wasdir = 1;
-	}
+	wasdir = removeTrailingSlash(dst);
 	
 	if(!(lstat(dst->ptr, &sd) == -1 && errno == ENOENT)) {
 		//dst already exists, we need to unlink it for symlink to succeed
@@ -270,16 +306,11 @@ static void doLink(stringptr* src, stringptr* dst, struct stat* ss) {
 		log_putln(1);
 	}
 	
-	//updating the link's timestamp does in fact update the timestamp
-	//of the file it points to, which can confuse other parts of the program.
-	//so we dont do it.
-	//copyDate(dst, ss);
-	(void) ss;
+	setLinkTimestamp(dst, ss);
 	
-	if(wasdir) {
+	if(wasdir) 
 		restoreTrailingSlash(dst);
-	}
-	
+	skip:
 	progstate.total.symlink += 1;
 }
 
@@ -296,10 +327,9 @@ static void doDir(stringptr* subd) {
 		sblist_iter(f.files, file) {
 			file_combined_src = stringptr_concat(combined_src, file, NULL);
 			file_combined_dst = stringptr_concat(combined_dst, file, NULL);
-			if(isdir(file)) {
-				// remove trailing slash so stat doesnt resolve symlinks...
-				stringptr_shiftleft(file_combined_src, 1);
-			}
+			
+			removeTrailingSlash(file_combined_src); // remove trailing slash so stat doesnt resolve symlinks...
+			
 			if(lstat(file_combined_src->ptr, &src_stat) == -1) {
 				log_puts(2, file_combined_src);
 				log_puts(2, SPL(" "));
@@ -313,10 +343,13 @@ static void doDir(stringptr* subd) {
 					restoreTrailingSlash(file_combined_src);
 
 					stringptr *path_combined = stringptr_concat(subd, file, NULL);
-					if(access(file_combined_dst->ptr, R_OK) == -1 && errno == ENOENT)
-						makeDir(file_combined_src, file_combined_dst);
+					if(access(file_combined_dst->ptr, R_OK) == -1 && errno == ENOENT) {
+						makeDir(file_combined_dst, &src_stat);
+					}
+					// else updateTimestamp(file_combined_dst, &src_stat);
 					doDir(path_combined);
 					stringptr_free(path_combined);
+					updateTimestamp(file_combined_dst, &src_stat);
 				} else {
 					doFile(file_combined_src, file_combined_dst, &src_stat);
 				}
@@ -350,27 +383,71 @@ static void printStats(long ms) {
 }
 
 static int syntax() {
-	log_puts(1, SPL("prog srcdir dstdir\n"));
+	log_puts(1, SPL("filesync OPTIONS srcdir dstdir\n\n"
+		"\toptions: -s[imulate] -e[xists] -d[ate] -f[ilesize] -c[hecksum] -sn\n"
+		"\t-s  : only simulate and print to stdout (dry run)\n"
+		"\t-e  : copy files that dont exist on the dest side\n"
+		"\t-d  : copy files with different timestamp (modtime)\n"
+		"\t-f  : copy files with different filesize\n"
+		"\t-c  : copy files if checksum is different (not implemented yet)\n"
+		"\t-sn : skip copy if destination is newer than source\n\n"
+		"WARNING: you should *always* redirect stdout and stderr\n"
+		"into some logfile. to see the actual state, attach with\n"
+		"tail -f or tee...\n"
+		"After a full run you can pipe the stdout.txt into the supplied\n"
+		"perl script which can check the CRCs, in case you want to\n"
+		"verify the copy. it is proposed that this run happens separately,\n"
+		"so that the copied files are no longer buffered.\n\n"
+	));
 	return 1;
 }
 
 int main (int argc, char** argv) {
-	if(argc < 2) return syntax();
+	
+	if(argc < 4) return syntax();
 	int startarg = 1;
 	int freedst = 0;
 	struct timeval starttime;
+	struct stat src_stat;
 	
-	progstate.checkFileSize = 1;
-	progstate.checkDate = 1;
-	progstate.checkChecksum = 1;
+	op_state op_b, *op = &op_b;
+	
+	op_init(op, argc, argv);
+	
+	if(op_hasflag(op, SPL("e")) || op_hasflag(op, SPL("exists")))
+		progstate.checkExists = 1;
+	
+	if(op_hasflag(op, SPL("s")) || op_hasflag(op, SPL("simulate")))
+		progstate.simulate = 1;
+	
+	if(op_hasflag(op, SPL("f")) || op_hasflag(op, SPL("filesize")))
+		progstate.checkFileSize = 1;
+	
+	if(op_hasflag(op, SPL("d")) || op_hasflag(op, SPL("date")))
+		progstate.checkDate = 1;
+	
+	if(op_hasflag(op, SPL("c")) || op_hasflag(op, SPL("checksum")))
+		progstate.checkChecksum = 1;
+
+	if(op_hasflag(op, SPL("sn")))
+		progstate.skipIfNewer = 1;
+	
+	
+	startarg = argc - 2;
 	
 	memset(&progstate.total, 0, sizeof(totals));
 	
 	progstate.srcdir = stringptr_fromchar(argv[startarg], &progstate.srcdir_b);
 	progstate.dstdir = stringptr_fromchar(argv[startarg+1], &progstate.dstdir_b);
 	
-	if(access(progstate.dstdir->ptr, R_OK) == -1 && errno == ENOENT)
-						makeDir(progstate.srcdir, progstate.dstdir);
+	if(access(progstate.dstdir->ptr, R_OK) == -1 && errno == ENOENT) {
+		if(stat(progstate.srcdir->ptr, &src_stat) == -1) {
+			log_perror("stat");
+			return 1;
+		}
+		makeDir(progstate.dstdir, &src_stat);
+	}
+	
 	if(!isdir(progstate.dstdir)) {
 		progstate.dstdir = stringptr_concat(progstate.dstdir, SPL("/"), NULL);
 		freedst = 1;
