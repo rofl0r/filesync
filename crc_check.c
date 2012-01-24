@@ -1,5 +1,6 @@
 #include "../lib/include/crc32c.h"
 #include <stdio.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
