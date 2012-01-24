@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <arpa/inet.h>
 
 int syntax() {
 	puts("prog filename");
@@ -56,6 +57,6 @@ int main(int argc, char**argv) {
 		return 1;
 	}
 	CRC32C_InitTables();
-	printf("%.8x\n", getcrc(argv[1], st.st_size, st.st_blksize));
+	printf("%.8x\n", htonl(getcrc(argv[1], st.st_size, st.st_blksize)));
 	return 0;
 }

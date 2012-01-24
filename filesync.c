@@ -16,19 +16,20 @@
     51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 */
-
-
+#undef _GNU_SOURCE
+#define _GNU_SOURCE
+#include "../lib/include/timelib.h"
 #include "../lib/include/filelist.h"
 #include "../lib/include/filelib.h"
 #include "../lib/include/strlib.h"
 #include "../lib/include/logger.h"
 #include "../lib/include/crc32c.h"
-#include "../lib/include/timelib.h"
 #include <fcntl.h>
 #include <stdio.h>
 #include <sys/stat.h>
 #include <errno.h>
 #include <utime.h>
+#include <arpa/inet.h>
 
 typedef struct {
 	uint64_t symlink;
@@ -171,8 +172,7 @@ static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat) {
 	char crc_str[16];
 	char mbs_str[64];
 	CRC32C_Final(crc_result.asChar, &crc);
-	//FIXME print CRC result in big endian
-	ulz_snprintf(crc_str, sizeof(crc_str), "%.8x", crc_result.asInt);
+	ulz_snprintf(crc_str, sizeof(crc_str), "%.8x", htonl(crc_result.asInt));
 	
 	// we do not use printf because it has a limited buffer size
 	log_put(1, VARISL("CRC: "), VARIC(crc_str), VARISL(", "), 
