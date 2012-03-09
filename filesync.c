@@ -44,6 +44,8 @@ typedef struct {
 	stringptr* srcdir;
 	stringptr dstdir_b;
 	stringptr* dstdir;
+	stringptr diffdir_b;
+	stringptr* diffdir;
 	
 	totals total;
 	
@@ -213,13 +215,13 @@ static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat) {
 	progstate.total.copies += 1;
 }
 
-static void doFile(stringptr* src, stringptr* dst, struct stat* ss) {
+static void doFile(stringptr* src, stringptr* dst, stringptr* diff, struct stat* ss) {
 	struct stat sd;
 	if(stat(dst->ptr, &sd) == -1) {
 		switch(errno) {
 			case ENOENT:
 				if(progstate.checkExists)
-					doSync(src, dst, ss);
+					doSync(src, diff, ss);
 				return;
 			default:
 				log_puts(2, dst);
@@ -236,7 +238,7 @@ static void doFile(stringptr* src, stringptr* dst, struct stat* ss) {
 		(progstate.checkFileSize && ss->st_size != sd.st_size) ||
 		(progstate.checkDate && ss->st_mtime != sd.st_mtime)
 	) {
-		doSync(src, dst, ss);
+		doSync(src, diff, ss);
 		return;
 	} else if(progstate.checkChecksum) {
 		/* TODO launch 2 processes, each computing the CRC of src/dest in parallel, 
@@ -318,15 +320,19 @@ static void doDir(stringptr* subd) {
 	filelist f;
 	stringptr *combined_src = stringptr_concat(progstate.srcdir, subd, NULL);
 	stringptr *combined_dst = stringptr_concat(progstate.dstdir, subd, NULL);
+	stringptr *combined_diff = stringptr_concat(progstate.diffdir, subd, NULL);
+	
 	struct stat src_stat;
 	
 	if(!filelist_search(&f, combined_src, SPL("*"), FLF_EXCLUDE_PATH | FLF_INCLUDE_HIDDEN)) {
 		stringptr* file;
 		stringptr* file_combined_src;
 		stringptr* file_combined_dst;
+		stringptr* file_combined_diff;
 		sblist_iter(f.files, file) {
 			file_combined_src = stringptr_concat(combined_src, file, NULL);
 			file_combined_dst = stringptr_concat(combined_dst, file, NULL);
+			file_combined_diff = stringptr_concat(combined_diff, file, NULL);
 			
 			removeTrailingSlash(file_combined_src); // remove trailing slash so stat doesnt resolve symlinks...
 			
@@ -337,32 +343,33 @@ static void doDir(stringptr* subd) {
 			} else {
 				if(S_ISLNK(src_stat.st_mode)) {
 					
-					doLink(file_combined_src, file_combined_dst, &src_stat);
+					doLink(file_combined_src, file_combined_diff, &src_stat);
 					
 				} else if(isdir(file)) {
 					restoreTrailingSlash(file_combined_src);
 
 					stringptr *path_combined = stringptr_concat(subd, file, NULL);
-					if(access(file_combined_dst->ptr, R_OK) == -1 && errno == ENOENT) {
-						makeDir(file_combined_dst, &src_stat);
+					if(access(file_combined_diff->ptr, R_OK) == -1 && errno == ENOENT) {
+						makeDir(file_combined_diff, &src_stat);
 					}
 					// else updateTimestamp(file_combined_dst, &src_stat);
 					doDir(path_combined);
 					stringptr_free(path_combined);
-					updateTimestamp(file_combined_dst, &src_stat);
+					updateTimestamp(file_combined_diff, &src_stat);
 				} else {
-					doFile(file_combined_src, file_combined_dst, &src_stat);
+					doFile(file_combined_src, file_combined_dst, file_combined_diff, &src_stat);
 				}
 			}
 			stringptr_free(file_combined_src);
 			stringptr_free(file_combined_dst);
+			stringptr_free(file_combined_diff);
 		}
 		filelist_free(&f);
 	}
 	
 	stringptr_free(combined_src);
 	stringptr_free(combined_dst);
-	
+	stringptr_free(combined_diff);
 }
 
 static void printStats(long ms) {
@@ -383,9 +390,13 @@ static void printStats(long ms) {
 }
 
 static int syntax() {
-	log_puts(1, SPL("filesync OPTIONS srcdir dstdir\n\n"
+	log_puts(1, SPL("filesync OPTIONS srcdir dstdir [diffdir]\n\n"
+		"if diffdir is given, the program will check for files in destdir,\n"
+		"but will write into diffdir instead. this allows usage as a simple\n"
+		"incremental backup tool.\n\n"
 		"\toptions: -s[imulate] -e[xists] -d[ate] -f[ilesize] -c[hecksum] -sn\n"
 		"\t-s  : only simulate and print to stdout (dry run)\n"
+		"\t      note: will still generate directory structure if needed\n"
 		"\t-e  : copy files that dont exist on the dest side\n"
 		"\t-d  : copy files with different timestamp (modtime)\n"
 		"\t-f  : copy files with different filesize\n"
@@ -406,7 +417,8 @@ int main (int argc, char** argv) {
 	
 	if(argc < 4) return syntax();
 	int startarg = 1;
-	int freedst = 0;
+	int freedst = 0, freediff = 0;
+	int dirargs = 0, i;
 	struct timeval starttime;
 	struct stat src_stat;
 	
@@ -433,24 +445,41 @@ int main (int argc, char** argv) {
 		progstate.skipIfNewer = 1;
 	
 	
-	startarg = argc - 2;
+	for(i = 1; i < argc; i++)
+		if(argv[i][0] != '-') dirargs++;
+	
+	if(dirargs < 2 || dirargs > 3) {
+		log_puts(2, SPL("invalid arguments detected\n"));
+		return 1;
+	}
+	
+	startarg = argc - dirargs;
 	
 	memset(&progstate.total, 0, sizeof(totals));
 	
 	progstate.srcdir = stringptr_fromchar(argv[startarg], &progstate.srcdir_b);
 	progstate.dstdir = stringptr_fromchar(argv[startarg+1], &progstate.dstdir_b);
+	if(dirargs == 3)
+		progstate.diffdir = stringptr_fromchar(argv[startarg+2], &progstate.diffdir_b);
+	else
+		progstate.diffdir = stringptr_fromchar(argv[startarg+1], &progstate.diffdir_b);
 	
-	if(access(progstate.dstdir->ptr, R_OK) == -1 && errno == ENOENT) {
+	if(access(progstate.diffdir->ptr, R_OK) == -1 && errno == ENOENT) {
 		if(stat(progstate.srcdir->ptr, &src_stat) == -1) {
 			log_perror("stat");
 			return 1;
 		}
-		makeDir(progstate.dstdir, &src_stat);
+		makeDir(progstate.diffdir, &src_stat);
 	}
 	
 	if(!isdir(progstate.dstdir)) {
 		progstate.dstdir = stringptr_concat(progstate.dstdir, SPL("/"), NULL);
 		freedst = 1;
+	}
+	
+	if(!isdir(progstate.diffdir)) {
+		progstate.diffdir = stringptr_concat(progstate.diffdir, SPL("/"), NULL);
+		freediff = 1;
 	}
 	
 	gettimestamp(&starttime);
@@ -462,6 +491,7 @@ int main (int argc, char** argv) {
 	printStats(mspassed(&starttime));
 	
 	if(freedst) stringptr_free(progstate.dstdir);
+	if(freediff) stringptr_free(progstate.diffdir);
 	
 	return 0;
 }
