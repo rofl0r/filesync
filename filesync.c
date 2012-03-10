@@ -450,7 +450,7 @@ int main (int argc, char** argv) {
 	
 	if(dirargs < 2 || dirargs > 3) {
 		log_puts(2, SPL("invalid arguments detected\n"));
-		return 1;
+		return syntax();
 	}
 	
 	startarg = argc - dirargs;
@@ -464,12 +464,17 @@ int main (int argc, char** argv) {
 	else
 		progstate.diffdir = stringptr_fromchar(argv[startarg+1], &progstate.diffdir_b);
 	
-	if(access(progstate.diffdir->ptr, R_OK) == -1 && errno == ENOENT) {
-		if(stat(progstate.srcdir->ptr, &src_stat) == -1) {
-			log_perror("stat");
+	if(access(progstate.diffdir->ptr, R_OK) == -1) {
+		if(errno == ENOENT) {
+			if(stat(progstate.srcdir->ptr, &src_stat) == -1) {
+				log_perror("stat");
+				return 1;
+			}
+			makeDir(progstate.diffdir, &src_stat);
+		} else {
+			log_perror("uncaught error while trying to access dest/diff dir");
 			return 1;
 		}
-		makeDir(progstate.diffdir, &src_stat);
 	}
 	
 	if(!isdir(progstate.dstdir)) {
