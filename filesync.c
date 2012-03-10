@@ -349,13 +349,14 @@ static void doDir(stringptr* subd) {
 					restoreTrailingSlash(file_combined_src);
 
 					stringptr *path_combined = stringptr_concat(subd, file, NULL);
-					if(access(file_combined_diff->ptr, R_OK) == -1 && errno == ENOENT) {
+					if(!progstate.simulate && access(file_combined_diff->ptr, R_OK) == -1 && errno == ENOENT) {
 						makeDir(file_combined_diff, &src_stat);
 					}
 					// else updateTimestamp(file_combined_dst, &src_stat);
 					doDir(path_combined);
 					stringptr_free(path_combined);
-					updateTimestamp(file_combined_diff, &src_stat);
+					if(!progstate.simulate)
+						updateTimestamp(file_combined_diff, &src_stat);
 				} else {
 					doFile(file_combined_src, file_combined_dst, file_combined_diff, &src_stat);
 				}
@@ -396,7 +397,7 @@ static int syntax() {
 		"incremental backup tool.\n\n"
 		"\toptions: -s[imulate] -e[xists] -d[ate] -f[ilesize] -c[hecksum] -sn\n"
 		"\t-s  : only simulate and print to stdout (dry run)\n"
-		"\t      note: will still generate directory structure if needed\n"
+		"\t      note: will not print symlinks currently\n"
 		"\t-e  : copy files that dont exist on the dest side\n"
 		"\t-d  : copy files with different timestamp (modtime)\n"
 		"\t-f  : copy files with different filesize\n"
