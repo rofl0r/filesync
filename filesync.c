@@ -54,7 +54,7 @@ typedef struct {
 	int checkChecksum:1;
 	int checkFileSize:1;
 	int checkDate:1;
-	int skipIfNewer:1;
+	int checkDateOlder:1;
 	int simulate:1;
 } progstate_s;
 
@@ -112,7 +112,7 @@ static char* getMbsString(char* mbs_buf, size_t buf_size, uint64_t bytes, long m
 	return mbs_buf;
 }
 
-static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat) {
+static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat, char* reason) {
 	int fds, fdd;
 	
 	int errclose;
@@ -209,7 +209,9 @@ static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat) {
 	// we do not use printf because it has a limited buffer size
 	log_put(1, VARISL("CRC: "), VARIC(crc_str), VARISL(", "), 
 		VARIS(src), VARISL(" -> "), VARIS(dst), 
-		VARISL(" @"), VARIC(getMbsString(mbs_str, sizeof(mbs_str), src_stat->st_size, time_passed)), NULL);
+		VARISL(" @"), VARIC(getMbsString(mbs_str, sizeof(mbs_str), src_stat->st_size, time_passed)),
+		VARISL(" ("), VARIC(reason), VARISL(")"),
+		NULL);
 	
 	progstate.total.copied += src_stat->st_size;
 	progstate.total.copies += 1;
@@ -217,11 +219,15 @@ static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat) {
 
 static void doFile(stringptr* src, stringptr* dst, stringptr* diff, struct stat* ss) {
 	struct stat sd;
+	char* reason = "x";
 	if(stat(dst->ptr, &sd) == -1) {
 		switch(errno) {
 			case ENOENT:
-				if(progstate.checkExists)
-					doSync(src, diff, ss);
+				if(progstate.checkExists) {
+					reason = "e";
+					do_sync:
+					doSync(src, diff, ss, reason);
+				}
 				return;
 			default:
 				log_puts(2, dst);
@@ -230,22 +236,22 @@ static void doFile(stringptr* src, stringptr* dst, stringptr* diff, struct stat*
 				break;
 		}
 	}
-	if(ss->st_mtime < sd.st_mtime) {
+	if(progstate.checkFileSize && ss->st_size != sd.st_size) {
+		reason = "f";
+		goto do_sync;
+	} else if (progstate.checkDate && ss->st_mtime > sd.st_mtime) {
+		reason = "d";
+		goto do_sync;
+	} else if (progstate.checkDateOlder && ss->st_mtime < sd.st_mtime) {
+		reason = "o";
+		goto do_sync;
+	} else if (!progstate.checkDateOlder && ss->st_mtime < sd.st_mtime) {
 		ulz_fprintf(2, "dest is newer than source: %s , %s : %llu , %llu\n", src->ptr, dst->ptr, ss->st_mtime, sd.st_mtime);
-		if(progstate.skipIfNewer) goto skipper;
-	}
-	if(
-		(progstate.checkFileSize && ss->st_size != sd.st_size) ||
-		(progstate.checkDate && ss->st_mtime != sd.st_mtime)
-	) {
-		doSync(src, diff, ss);
-		return;
 	} else if(progstate.checkChecksum) {
 		/* TODO launch 2 processes, each computing the CRC of src/dest in parallel, 
 		 * then join em and compare crc and warn and copy if different
 		 */
 	}
-	skipper:
 	progstate.total.skipped += 1;
 }
 
@@ -395,14 +401,14 @@ static int syntax() {
 		"if diffdir is given, the program will check for files in destdir,\n"
 		"but will write into diffdir instead. this allows usage as a simple\n"
 		"incremental backup tool.\n\n"
-		"\toptions: -s[imulate] -e[xists] -d[ate] -f[ilesize] -c[hecksum] -sn\n"
+		"\toptions: -s[imulate] -e[xists] -d[ate] -o[lder] -f[ilesize] -c[hecksum]\n"
 		"\t-s  : only simulate and print to stdout (dry run)\n"
 		"\t      note: will not print symlinks currently\n"
-		"\t-e  : copy files that dont exist on the dest side\n"
-		"\t-d  : copy files with different timestamp (modtime)\n"
-		"\t-f  : copy files with different filesize\n"
-		"\t-c  : copy files if checksum is different (not implemented yet)\n"
-		"\t-sn : skip copy if destination is newer than source\n\n"
+		"\t-e  : copy source files that dont exist on the dest side\n"
+		"\t-d  : copy source files with newer timestamp (modtime)\n"
+		"\t-o  : copy source files with older timestamp (modtime)\n"
+		"\t-f  : copy source files with different filesize\n"
+		"\t-c  : copy source files if checksum is different (not implemented yet)\n\n"
 		"WARNING: you should *always* redirect stdout and stderr\n"
 		"into some logfile. to see the actual state, attach with\n"
 		"tail -f or tee...\n"
@@ -426,25 +432,14 @@ int main (int argc, char** argv) {
 	op_state op_b, *op = &op_b;
 	
 	op_init(op, argc, argv);
-	
-	if(op_hasflag(op, SPL("e")) || op_hasflag(op, SPL("exists")))
-		progstate.checkExists = 1;
-	
-	if(op_hasflag(op, SPL("s")) || op_hasflag(op, SPL("simulate")))
-		progstate.simulate = 1;
-	
-	if(op_hasflag(op, SPL("f")) || op_hasflag(op, SPL("filesize")))
-		progstate.checkFileSize = 1;
-	
-	if(op_hasflag(op, SPL("d")) || op_hasflag(op, SPL("date")))
-		progstate.checkDate = 1;
-	
-	if(op_hasflag(op, SPL("c")) || op_hasflag(op, SPL("checksum")))
-		progstate.checkChecksum = 1;
 
-	if(op_hasflag(op, SPL("sn")))
-		progstate.skipIfNewer = 1;
+	progstate.simulate = op_hasflag(op, SPL("s")) || op_hasflag(op, SPL("simulate"));
 	
+	progstate.checkExists = op_hasflag(op, SPL("e")) || op_hasflag(op, SPL("exists"));
+	progstate.checkFileSize = op_hasflag(op, SPL("f")) || op_hasflag(op, SPL("filesize"));
+	progstate.checkDate = op_hasflag(op, SPL("d")) || op_hasflag(op, SPL("date"));
+	progstate.checkDateOlder = op_hasflag(op, SPL("o")) || op_hasflag(op, SPL("older"));
+	progstate.checkChecksum = op_hasflag(op, SPL("c")) || op_hasflag(op, SPL("checksum"));
 	
 	for(i = 1; i < argc; i++)
 		if(argv[i][0] != '-') dirargs++;
