@@ -455,10 +455,7 @@ int main (int argc, char** argv) {
 	
 	progstate.srcdir = stringptr_fromchar(argv[startarg], &progstate.srcdir_b);
 	progstate.dstdir = stringptr_fromchar(argv[startarg+1], &progstate.dstdir_b);
-	if(dirargs == 3)
-		progstate.diffdir = stringptr_fromchar(argv[startarg+2], &progstate.diffdir_b);
-	else
-		progstate.diffdir = stringptr_fromchar(argv[startarg+1], &progstate.diffdir_b);
+	progstate.diffdir = stringptr_fromchar((dirargs == 3) ? argv[startarg+2] : argv[startarg+1], &progstate.diffdir_b);
 	
 	if(access(progstate.diffdir->ptr, R_OK) == -1) {
 		if(errno == ENOENT) {
