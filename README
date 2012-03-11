@@ -1,0 +1,38 @@
+FileSync README
+---------------
+
+FileSync's main purpose is to synchronize two directories with each other.
+However it's quite flexible, for example its simulation mode could be used
+to make a CRC comparison of 2 directories, without actually overwriting
+anything.
+
+there are several rules which decide what has to copied
+- existance
+- filesize
+- older modification time
+- newer modification time
+- different CRC
+
+Additionally it has an operation mode that takes a 3rd directory parameter
+which is used to store the differences. if this parameter is not used,
+filesync will just use the destination directory instead.
+this mode can be used to create incremental backups, or e.g. to 
+create an archive of changed files as a patch. using unionfs-fuse or aufs
+leads to even more interesting usecases...
+
+please simply run the filesync command without arguments to see the full
+list of possible switches and features, and to learn about its usage.
+
+BUILD
+-----
+cd /tmp
+mkdir filesync-0000
+cd filesync-0000/
+git clone https://github.com/rofl0r/libulz lib
+git clone https://github.com/rofl0r/filesync
+git clone https://github.com/rofl0r/rcb
+export PATH=$PATH:/tmp/filesync-0000/rcb
+ln -s /tmp/filesync-0000/rcb/rcb.pl /tmp/filesync-0000/rcb/rcb
+cd filesync
+CC="musl-gcc -static" "CFLAGS=-O0 -g -Wall -Wextra" rcb filesync.c
+
