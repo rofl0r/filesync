@@ -31,6 +31,9 @@
 #include <errno.h>
 #include <utime.h>
 #include <arpa/inet.h>
+#include <pthread.h>
+
+//RcB: LINK "-lpthread"
 
 typedef struct {
 	uint64_t symlink;
@@ -112,29 +115,22 @@ static char* getMbsString(char* mbs_buf, size_t buf_size, uint64_t bytes, long m
 	return mbs_buf;
 }
 
-static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat, char* reason) {
-	int fds, fdd;
-	
+typedef union {
+	uint32_t asInt;
+	uint8_t asChar[4];
+} crc_t;
+
+/* if dest is not passed, no copy will be produced 
+ * returns 1 if successfull, 0 otherwise */
+static int get_crc_and_copy(stringptr* src, stringptr* dst, struct stat *src_stat, crc_t* crc_result) {
+	int fds, fdd = -1;
 	int errclose;
 	stringptr* err_data;
 	char* err_func;
 	
 	uint64_t done = 0;
 	CRC32C_CTX crc;
-	union {
-		uint32_t asInt;
-		uint8_t asChar[4];
-	} crc_result;
-	
-	struct timeval starttime;
 	char buf[src_stat->st_blksize];
-	long time_passed;
-	
-	if(progstate.simulate) {
-		crc_result.asInt = 0;
-		time_passed = 0;
-		goto stats;
-	}
 	
 	if((fds = open(src->ptr, O_RDONLY)) == -1) {
 		err_data = src;
@@ -149,24 +145,21 @@ static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat, char* 
 		if(errclose) {
 			close(fds);
 			errclose--;
-			if(errclose) {
+			if(errclose && fdd != -1) {
 				close(fdd);
 				errclose--;
 			}
 		}
-		return;
+		return 0;
 	};
-	if((fdd = open(dst->ptr, O_WRONLY | O_CREAT | O_TRUNC, src_stat->st_mode)) == -1) {
+	if(dst && (fdd = open(dst->ptr, O_WRONLY | O_CREAT | O_TRUNC, src_stat->st_mode)) == -1) {
 		err_data = dst;
 		errclose = 1;
 		err_func = "open";
 		goto error;
 	};
 	
-	// we always compute the CRC, because it's nearly "for free",
-	// since the file has to be read anyway.
 	CRC32C_Init(&crc);
-	gettimestamp(&starttime);
 	while(done < (uint64_t) src_stat->st_size) {
 		ssize_t nread = read(fds, buf, src_stat->st_blksize);
 		if(nread == -1) {
@@ -181,7 +174,7 @@ static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat, char* 
 			
 			CRC32C_Update(&crc, (const uint8_t*) buf, nread);
 			
-			while(nwrote < nread) {
+			if(fdd != -1) while(nwrote < nread) {
 				nwrote_s = write(fdd, buf + nwrote, nread - nwrote); 
 				if(nwrote_s == -1) {
 					err_data = dst;
@@ -195,11 +188,31 @@ static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat, char* 
 		}
 	}
 	close(fds);
-	close(fdd);
+	if (fdd != -1) close(fdd);
+	CRC32C_Final(crc_result->asChar, &crc);
+	return 1;
+}
+
+static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat, char* reason) {
+	crc_t crc_result;
+	struct timeval starttime;
+	long time_passed;
+	
+	if(progstate.simulate) {
+		crc_result.asInt = 0;
+		time_passed = 0;
+		goto stats;
+	}
+	
+	gettimestamp(&starttime);
+
+	// we always compute the CRC, because it's nearly "for free",
+	// since the file has to be read anyway for the copy.
+	if(!get_crc_and_copy(src, dst, src_stat, &crc_result)) return;
+	
 	copyDate(dst, src_stat);
 	char crc_str[16];
 	char mbs_str[64];
-	CRC32C_Final(crc_result.asChar, &crc);
 	
 	time_passed = mspassed(&starttime);
 	
@@ -215,6 +228,64 @@ static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat, char* 
 	
 	progstate.total.copied += src_stat->st_size;
 	progstate.total.copies += 1;
+}
+
+typedef struct {
+	stringptr* fn;
+	struct stat* file_stat;
+	crc_t* crc_res;
+	int error;
+} thread_data;
+
+static void* child_thread(void* data) {
+	thread_data* td = (thread_data*) data;
+	td->error = !get_crc_and_copy(td->fn, NULL, td->file_stat, td->crc_res);
+	return NULL;
+}
+
+static int checksumDiffers(stringptr* src, stringptr* dst, struct stat* src_stat, struct stat* dst_stat) {
+	crc_t crc_src, crc_dst;
+	if((src_stat->st_dev != dst_stat->st_dev)) {
+		pthread_attr_t ptattr;
+		pthread_t child;
+		thread_data td = {src, src_stat, &crc_src};
+		int error = 0;
+		int* threaderror;
+		char* errmsg = NULL;
+		if((errno = pthread_attr_init(&ptattr))) {
+			errmsg = "pthread_attr_init";
+			pt_err:
+			log_perror(errmsg);
+			return 0;
+		}
+		if((errno = pthread_attr_setstacksize(&ptattr, 128 * 1024))) {
+			errmsg = "pthread_attr_init";
+			goto pt_err;
+		}
+		if((errno = pthread_create(&child, &ptattr, child_thread, (void*) &td))) {
+			errmsg = "pthread_create";
+			goto pt_err;
+		}
+		
+		if(!get_crc_and_copy(dst, NULL, dst_stat, &crc_dst)) error = 1;
+		
+		if((errno = pthread_join(child, NULL))) {
+			errmsg = "pthread_join";
+			goto pt_err;
+		}
+		if((errno = pthread_attr_destroy(&ptattr))) {
+			errmsg = "pthread_attr_destroy";
+			goto pt_err;
+		}
+		
+		if(td.error || error) return 0;
+		
+	} else {
+		if(!get_crc_and_copy(src, NULL, src_stat, &crc_src)) return 0;
+		if(!get_crc_and_copy(dst, NULL, dst_stat, &crc_dst)) return 0;
+	}
+	
+	return crc_src.asInt != crc_dst.asInt;
 }
 
 static void doFile(stringptr* src, stringptr* dst, stringptr* diff, struct stat* ss) {
@@ -245,13 +316,13 @@ static void doFile(stringptr* src, stringptr* dst, stringptr* diff, struct stat*
 	} else if (progstate.checkDateOlder && ss->st_mtime < sd.st_mtime) {
 		reason = "o";
 		goto do_sync;
+	} else if(progstate.checkChecksum && checksumDiffers(src, dst, ss, &sd)) {
+		reason = "c";
+		goto do_sync;
 	} else if (!progstate.checkDateOlder && ss->st_mtime < sd.st_mtime) {
 		ulz_fprintf(2, "dest is newer than source: %s , %s : %llu , %llu\n", src->ptr, dst->ptr, ss->st_mtime, sd.st_mtime);
-	} else if(progstate.checkChecksum) {
-		/* TODO launch 2 processes, each computing the CRC of src/dest in parallel, 
-		 * then join em and compare crc and warn and copy if different
-		 */
 	}
+	
 	progstate.total.skipped += 1;
 }
 
@@ -405,10 +476,14 @@ static int syntax() {
 		"\t-s  : only simulate and print to stdout (dry run)\n"
 		"\t      note: will not print symlinks currently\n"
 		"\t-e  : copy source files that dont exist on the dest side\n"
+		"\t-f  : copy source files with different filesize\n"
 		"\t-d  : copy source files with newer timestamp (modtime)\n"
 		"\t-o  : copy source files with older timestamp (modtime)\n"
-		"\t-f  : copy source files with different filesize\n"
-		"\t-c  : copy source files if checksum is different (not implemented yet)\n\n"
+		"\t-c  : copy source files if checksums are different\n\n"
+		"filesync will always use the rule that has the least\n"
+		"runtime cost, e.g. a CRC-check will only be done\n"
+		"if the file has the same size and modtime, if filesize check\n"
+		"or modtime check are also enabled.\n\n"
 		"WARNING: you should *always* redirect stdout and stderr\n"
 		"into some logfile. to see the actual state, attach with\n"
 		"tail -f or tee...\n"
