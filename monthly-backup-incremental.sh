@@ -18,7 +18,7 @@
 # this program will use 2 directories for backups
 # month0 and month1
 # the current month is taken and modulo 2 applied. so for example
-# if the month is march, 3 % 1 == 1, the backup will be placed in
+# if the month is march, 3 % 2 == 1, the backup will be placed in
 # month1 directory.
 # inside this directory, a file "backup.month" will be checked
 # if the content is equal to the current month, 3 in our case,
