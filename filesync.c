@@ -33,6 +33,8 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 
+typedef unsigned long long ull;
+
 //RcB: LINK "-lpthread"
 
 typedef struct {
@@ -249,9 +251,8 @@ static int checksumDiffers(stringptr* src, stringptr* dst, struct stat* src_stat
 	if((src_stat->st_dev != dst_stat->st_dev)) {
 		pthread_attr_t ptattr;
 		pthread_t child;
-		thread_data td = {src, src_stat, &crc_src};
+		thread_data td = {.fn = src, .file_stat = src_stat, .crc_res = &crc_src, .error = 0};
 		int error = 0;
-		int* threaderror;
 		char* errmsg = NULL;
 		if((errno = pthread_attr_init(&ptattr))) {
 			errmsg = "pthread_attr_init";
@@ -322,7 +323,7 @@ static void doFile(stringptr* src, stringptr* dst, stringptr* diff, struct stat*
 		reason = "c";
 		goto do_sync;
 	} else if (!progstate.checkDateOlder && ss->st_mtime < sd.st_mtime) {
-		ulz_fprintf(2, "dest is newer than source: %s , %s : %llu , %llu\n", src->ptr, dst->ptr, ss->st_mtime, sd.st_mtime);
+		ulz_fprintf(2, "dest is newer than source: %s , %s : %llu , %llu\n", src->ptr, dst->ptr, (ull) ss->st_mtime, (ull) sd.st_mtime);
 	}
 	
 	progstate.total.skipped += 1;
@@ -460,10 +461,10 @@ static void printStats(long ms) {
 			"bytes copied: %llu\n"
 			"seconds: %lu\n"
 			"rate: %s\n",
-			progstate.total.copies, 
-			progstate.total.skipped, 
-			progstate.total.symlink, 
-			progstate.total.copied,
+			(ull) progstate.total.copies, 
+			(ull) progstate.total.skipped, 
+			(ull) progstate.total.symlink, 
+			(ull) progstate.total.copied,
 			ms / 1000,
 			getMbsString(mbs_buf, sizeof(mbs_buf), progstate.total.copied, ms)
 	);
