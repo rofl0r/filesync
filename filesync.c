@@ -59,6 +59,7 @@ typedef struct {
 	int checkDate:1;
 	int checkDateOlder:1;
 	int simulate:1;
+	int verbose:1;
 } progstate_s;
 
 static progstate_s progstate;
@@ -291,6 +292,7 @@ static int checksumDiffers(stringptr* src, stringptr* dst, struct stat* src_stat
 static void doFile(stringptr* src, stringptr* dst, stringptr* diff, struct stat* ss) {
 	struct stat sd;
 	char* reason = "x";
+	if(progstate.verbose) ulz_fprintf(2, "file: %s\n", src->ptr);
 	if(stat(dst->ptr, &sd) == -1) {
 		switch(errno) {
 			case ENOENT:
@@ -472,14 +474,15 @@ static int syntax() {
 		"if diffdir is given, the program will check for files in destdir,\n"
 		"but will write into diffdir instead. this allows usage as a simple\n"
 		"incremental backup tool.\n\n"
-		"\toptions: -s[imulate] -e[xists] -d[ate] -o[lder] -f[ilesize] -c[hecksum]\n"
+		"\toptions: -s[imulate] -e[xists] -d[ate] -o[lder] -f[ilesize] -c[hecksum] -v[erbose]\n"
 		"\t-s  : only simulate and print to stdout (dry run)\n"
 		"\t      note: will not print symlinks currently\n"
 		"\t-e  : copy source files that dont exist on the dest side\n"
 		"\t-f  : copy source files with different filesize\n"
 		"\t-d  : copy source files with newer timestamp (modtime)\n"
 		"\t-o  : copy source files with older timestamp (modtime)\n"
-		"\t-c  : copy source files if checksums are different\n\n"
+		"\t-c  : copy source files if checksums are different\n"
+		"\t-v  : verbose: always print actual filename, even when skipping\n\n"
 		"filesync will always use the rule that has the least\n"
 		"runtime cost, e.g. a CRC-check will only be done\n"
 		"if the file has the same size and modtime, if filesize check\n"
@@ -515,6 +518,7 @@ int main (int argc, char** argv) {
 	progstate.checkDate = op_hasflag(op, SPL("d")) || op_hasflag(op, SPL("date"));
 	progstate.checkDateOlder = op_hasflag(op, SPL("o")) || op_hasflag(op, SPL("older"));
 	progstate.checkChecksum = op_hasflag(op, SPL("c")) || op_hasflag(op, SPL("checksum"));
+	progstate.verbose = op_hasflag(op, SPL("v")) || op_hasflag(op, SPL("verbose"));
 	
 	for(i = 1; i < argc; i++)
 		if(argv[i][0] != '-') dirargs++;
