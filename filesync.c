@@ -32,6 +32,7 @@
 #include <utime.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <fnmatch.h>
 
 typedef unsigned long long ull;
 
@@ -51,6 +52,7 @@ typedef struct {
 	stringptr* dstdir;
 	stringptr diffdir_b;
 	stringptr* diffdir;
+	char* glob;
 
 	totals total;
 
@@ -422,8 +424,8 @@ static void doDir(stringptr* subd) {
 				log_perror("stat");
 			} else {
 				if(S_ISLNK(src_stat.st_mode)) {
-
-					doLink(file_combined_src, file_combined_diff, &src_stat);
+					if(!progstate.glob || !fnmatch(progstate.glob, file->ptr, 0))
+						doLink(file_combined_src, file_combined_diff, &src_stat);
 
 				} else if(isdir(file)) {
 					restoreTrailingSlash(file_combined_src);
@@ -438,7 +440,8 @@ static void doDir(stringptr* subd) {
 					if(!progstate.simulate)
 						updateTimestamp(file_combined_diff, &src_stat);
 				} else {
-					doFile(file_combined_src, file_combined_dst, file_combined_diff, &src_stat);
+					if(!progstate.glob || !fnmatch(progstate.glob, file->ptr, 0))
+						doFile(file_combined_src, file_combined_dst, file_combined_diff, &src_stat);
 				}
 			}
 			stringptr_free(file_combined_src);
@@ -483,7 +486,8 @@ static int syntax() {
 		"\t-d  : copy source files with newer timestamp (modtime)\n"
 		"\t-o  : copy source files with older timestamp (modtime)\n"
 		"\t-c  : copy source files if checksums are different\n"
-		"\t-v  : verbose: always print actual filename, even when skipping\n\n"
+		"\t-v  : verbose: always print actual filename, even when skipping\n"
+		"\t-glob=\"*.o\" only sync files that match glob\n\n"
 		"filesync will always use the rule that has the least\n"
 		"runtime cost, e.g. a CRC-check will only be done\n"
 		"if the file has the same size and modtime, if filesize check\n"
@@ -520,6 +524,7 @@ int main (int argc, char** argv) {
 	progstate.checkDateOlder = op_hasflag(op, SPL("o")) || op_hasflag(op, SPL("older"));
 	progstate.checkChecksum = op_hasflag(op, SPL("c")) || op_hasflag(op, SPL("checksum"));
 	progstate.verbose = op_hasflag(op, SPL("v")) || op_hasflag(op, SPL("verbose"));
+	progstate.glob = op_get(op, SPL("glob"));
 
 	for(i = 1; i < argc; i++)
 		if(argv[i][0] != '-') dirargs++;
