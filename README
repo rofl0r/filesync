@@ -34,5 +34,5 @@ git clone https://github.com/rofl0r/rcb
 export PATH=$PATH:/tmp/filesync-0000/rcb
 ln -s /tmp/filesync-0000/rcb/rcb.pl /tmp/filesync-0000/rcb/rcb
 cd filesync
-CC="musl-gcc -static" "CFLAGS=-O0 -g -Wall -Wextra" rcb filesync.c
+CC="musl-gcc -static" CFLAGS="-O0 -g -Wall -Wextra" rcb filesync.c
 
