@@ -46,6 +46,7 @@ typedef struct {
 	uint64_t copies;
 	uint64_t skipped;
 	uint64_t copied;
+	uint64_t errors;
 } totals;
 
 typedef struct {
@@ -217,7 +218,10 @@ static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat, char* 
 
 	// we always compute the CRC, because it's nearly "for free",
 	// since the file has to be read anyway for the copy.
-	if(!get_crc_and_copy(src, dst, src_stat, &crc_result)) return;
+	if(!get_crc_and_copy(src, dst, src_stat, &crc_result)) {
+		progstate.total.errors++;
+		return;
+	}
 
 	copyDate(dst, src_stat);
 	char crc_str[16];
@@ -487,12 +491,14 @@ static void printStats(long ms) {
 	ulz_fprintf(1,  "copied: %llu\n"
 			"skipped: %llu\n"
 			"symlinks: %llu\n"
+			"errors: %llu\n"
 			"bytes copied: %llu\n"
 			"seconds: %lu\n"
 			"rate: %s\n",
 			(ull) progstate.total.copies,
 			(ull) progstate.total.skipped,
 			(ull) progstate.total.symlink,
+			(ull) progstate.total.errors,
 			(ull) progstate.total.copied,
 			ms / 1000,
 			getMbsString(mbs_buf, sizeof(mbs_buf), progstate.total.copied, ms)
