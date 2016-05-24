@@ -69,6 +69,7 @@ typedef struct {
 	int checkDateOlder:1;
 	int simulate:1;
 	int verbose:1;
+	int warnNewer:1;
 } progstate_s;
 
 static progstate_s progstate;
@@ -354,7 +355,7 @@ static void doFile(stringptr* src, stringptr* dst, stringptr* diff, struct stat*
 	} else if(progstate.script && scriptDiffers(src, dst)) {
 		reason = "s";
 		goto do_sync;
-	} else if (!progstate.checkDateOlder && ss->st_mtime < sd.st_mtime) {
+	} else if (!progstate.checkDateOlder && progstate.warnNewer && ss->st_mtime < sd.st_mtime) {
 		ulz_fprintf(2, "dest is newer than source: %s , %s : %llu , %llu\n", src->ptr, dst->ptr, (ull) ss->st_mtime, (ull) sd.st_mtime);
 	}
 
@@ -510,7 +511,7 @@ static int syntax() {
 		"if diffdir is given, the program will check for files in destdir,\n"
 		"but will write into diffdir instead. this allows usage as a simple\n"
 		"incremental backup tool.\n\n"
-		"\toptions: -s[imulate] -e[xists] -d[ate] -o[lder] -f[ilesize] -c[hecksum] -v[erbose]\n"
+		"\toptions: -s[imulate] -e[xists] -d[ate] -o[lder] -f[ilesize] -c[hecksum] -w[arn] -v[erbose]\n"
 		"\t-s  : only simulate and print to stdout (dry run)\n"
 		"\t      note: will not print symlinks currently\n"
 		"\t-e  : copy source files that dont exist on the dest side\n"
@@ -518,6 +519,7 @@ static int syntax() {
 		"\t-d  : copy source files with newer timestamp (modtime)\n"
 		"\t-o  : copy source files with older timestamp (modtime)\n"
 		"\t-c  : copy source files if checksums are different\n"
+		"\t-w  : warn if dest is newer than src\n"
 		"\t-v  : verbose: always print actual filename, even when skipping\n"
 		"\t-glob=\"*.o\" only sync files that match glob\n\n"
 		"\t-script=./foo.sh execute ./foo.sh to decide if files differ\n"
@@ -558,6 +560,7 @@ int main (int argc, char** argv) {
 	progstate.checkDate = op_hasflag(op, SPL("d")) || op_hasflag(op, SPL("date"));
 	progstate.checkDateOlder = op_hasflag(op, SPL("o")) || op_hasflag(op, SPL("older"));
 	progstate.checkChecksum = op_hasflag(op, SPL("c")) || op_hasflag(op, SPL("checksum"));
+	progstate.warnNewer = op_hasflag(op, SPL("w")) || op_hasflag(op, SPL("warn"));
 	progstate.verbose = op_hasflag(op, SPL("v")) || op_hasflag(op, SPL("verbose"));
 	progstate.glob = op_get(op, SPL("glob"));
 	progstate.script = op_get(op, SPL("script"));
