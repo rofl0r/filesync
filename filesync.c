@@ -33,6 +33,9 @@
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <fnmatch.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <assert.h>
 
 typedef unsigned long long ull;
 
@@ -53,6 +56,7 @@ typedef struct {
 	stringptr diffdir_b;
 	stringptr* diffdir;
 	char* glob;
+	char* script;
 
 	totals total;
 
@@ -292,6 +296,25 @@ static int checksumDiffers(stringptr* src, stringptr* dst, struct stat* src_stat
 	return crc_src.asInt != crc_dst.asInt;
 }
 
+static int scriptDiffers(stringptr* src, stringptr* dst) {
+	pid_t pid;
+	if((pid = fork())) {
+		int r, ret;
+		ret = waitpid(pid, &r, 0);
+		if(ret == -1) { perror("waitpid"); exit(1); }
+		assert(ret == pid);
+		if(WIFEXITED(r) == 0) {
+			ulz_fprintf(2, "compare script terminated abnormally while comparing %s and %s\n", src->ptr, dst->ptr);
+			exit(1);
+		}
+		return WEXITSTATUS(r);
+	} else {
+		execl(progstate.script, progstate.script, src->ptr, dst->ptr, (char*)0);
+		perror("execl");
+		exit(1);
+	}
+}
+
 static void doFile(stringptr* src, stringptr* dst, stringptr* diff, struct stat* ss) {
 	struct stat sd;
 	char* reason = "x";
@@ -323,6 +346,9 @@ static void doFile(stringptr* src, stringptr* dst, stringptr* diff, struct stat*
 		goto do_sync;
 	} else if(progstate.checkChecksum && checksumDiffers(src, dst, ss, &sd)) {
 		reason = "c";
+		goto do_sync;
+	} else if(progstate.script && scriptDiffers(src, dst)) {
+		reason = "s";
 		goto do_sync;
 	} else if (!progstate.checkDateOlder && ss->st_mtime < sd.st_mtime) {
 		ulz_fprintf(2, "dest is newer than source: %s , %s : %llu , %llu\n", src->ptr, dst->ptr, (ull) ss->st_mtime, (ull) sd.st_mtime);
@@ -488,6 +514,9 @@ static int syntax() {
 		"\t-c  : copy source files if checksums are different\n"
 		"\t-v  : verbose: always print actual filename, even when skipping\n"
 		"\t-glob=\"*.o\" only sync files that match glob\n\n"
+		"\t-script=./foo.sh execute ./foo.sh to decide if files differ\n"
+		"      the script will get passed both filenames and must return\n"
+		"      true when they are equal, false if not\n\n"
 		"filesync will always use the rule that has the least\n"
 		"runtime cost, e.g. a CRC-check will only be done\n"
 		"if the file has the same size and modtime, if filesize check\n"
@@ -525,6 +554,7 @@ int main (int argc, char** argv) {
 	progstate.checkChecksum = op_hasflag(op, SPL("c")) || op_hasflag(op, SPL("checksum"));
 	progstate.verbose = op_hasflag(op, SPL("v")) || op_hasflag(op, SPL("verbose"));
 	progstate.glob = op_get(op, SPL("glob"));
+	progstate.script = op_get(op, SPL("script"));
 
 	for(i = 1; i < argc; i++)
 		if(argv[i][0] != '-') dirargs++;
