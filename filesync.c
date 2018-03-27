@@ -18,6 +18,8 @@
 */
 #undef _GNU_SOURCE
 #define _GNU_SOURCE
+#undef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
 #include "../lib/include/timelib.h"
 #include "../lib/include/filelist.h"
 #include "../lib/include/filelib.h"
