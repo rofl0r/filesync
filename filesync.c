@@ -25,6 +25,7 @@
 #include "../lib/include/logger.h"
 #include "../lib/include/optparser.h"
 #include "../lib/include/crc32c.h"
+#include "../lib/include/format.h"
 #include <fcntl.h>
 #include <stdio.h>
 #include <sys/stat.h>
