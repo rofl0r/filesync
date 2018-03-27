@@ -144,6 +144,17 @@ static int get_crc_and_copy(stringptr* src, stringptr* dst, struct stat *src_sta
 	CRC32C_CTX crc;
 	char buf[src_stat->st_blksize];
 
+	if(S_ISFIFO(src_stat->st_mode)) {
+		crc_result->asInt = 0;
+		if(mkfifo(dst->ptr, src_stat->st_mode & ~S_IFMT) == -1) {
+			err_data = dst;
+			err_func = "mkfifo";
+			errclose = 0;
+			goto error;
+		}
+		return 1;
+	}
+
 	if((fds = open(src->ptr, O_RDONLY)) == -1) {
 		err_data = src;
 		err_func = "open";
@@ -260,6 +271,11 @@ static void* child_thread(void* data) {
 
 static int checksumDiffers(stringptr* src, stringptr* dst, struct stat* src_stat, struct stat* dst_stat) {
 	crc_t crc_src, crc_dst;
+	// TODO: what happens if src is no fifo, but dst is ?
+	// TODO: handle S_ISBLK S_ISSOCK S_ISCHR
+	// (S_ISREG may be used to check whether regular file)
+	if(S_ISFIFO(src_stat->st_mode))
+		return 0;
 	if((src_stat->st_dev != dst_stat->st_dev)) {
 		pthread_attr_t ptattr;
 		pthread_t child;
