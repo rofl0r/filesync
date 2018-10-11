@@ -334,7 +334,7 @@ static int scriptDiffers(stringptr* src, stringptr* dst) {
 	if((pid = fork())) {
 		int r, ret;
 		ret = waitpid(pid, &r, 0);
-		if(ret == -1) { perror("waitpid"); exit(1); }
+		if(ret == -1) { log_perror("waitpid"); exit(1); }
 		assert(ret == pid);
 		if(WIFEXITED(r) == 0) {
 			ulz_fprintf(2, "compare script terminated abnormally while comparing %s and %s\n", src->ptr, dst->ptr);
@@ -343,7 +343,7 @@ static int scriptDiffers(stringptr* src, stringptr* dst) {
 		return WEXITSTATUS(r);
 	} else {
 		execl(progstate.script, progstate.script, src->ptr, dst->ptr, (char*)0);
-		perror("execl");
+		log_perror("execl");
 		exit(1);
 	}
 }
