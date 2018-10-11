@@ -508,6 +508,8 @@ static void doDir(stringptr* subd) {
 			stringptr_free(file_combined_diff);
 		}
 		filelist_free(&f);
+	} else {
+		log_perror("glob");
 	}
 
 	stringptr_free(combined_src);
