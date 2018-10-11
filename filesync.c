@@ -44,6 +44,12 @@ typedef unsigned long long ull;
 
 //RcB: LINK "-lpthread"
 
+enum action {
+	ACT_SYNC = 1,
+	ACT_SIMULATE_SYNC = 2,
+	ACT_PRINT = 3,
+};
+
 typedef struct {
 	uint64_t symlink;
 	uint64_t copies;
@@ -63,6 +69,7 @@ typedef struct {
 	char* script;
 
 	totals total;
+	enum action action;
 
 	int doChecksum:1;
 	int checkExists:1;
@@ -70,7 +77,6 @@ typedef struct {
 	int checkFileSize:1;
 	int checkDate:1;
 	int checkDateOlder:1;
-	int simulate:1;
 	int verbose:1;
 	int warnNewer:1;
 } progstate_s;
@@ -110,7 +116,7 @@ static void updateTimestamp(stringptr* dst, struct stat* ss) {
 }
 
 static void makeDir(stringptr* dst, struct stat* ss) {
-	if(progstate.simulate)
+	if(progstate.action != ACT_SYNC)
 		return;
 	if(mkdir(dst->ptr, ss->st_mode) == -1) {
 		log_perror("mkdir");
@@ -223,10 +229,13 @@ static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat, char* 
 	struct timeval starttime;
 	long time_passed;
 
-	if(progstate.simulate) {
+	if(progstate.action == ACT_SIMULATE_SYNC) {
 		crc_result.asInt = 0;
 		time_passed = 0;
 		goto stats;
+	} else if(progstate.action == ACT_PRINT) {
+		log_put(1, VARIS(src), NULL);
+		return;
 	}
 
 	gettimestamp(&starttime);
@@ -399,7 +408,7 @@ static void doLink(stringptr* src, stringptr* dst, struct stat* ss) {
 	int wasdir = 0;
 	struct stat sd;
 	ssize_t ret;
-	if(progstate.simulate) goto skip;
+	if(progstate.action != ACT_SYNC) goto skip;
 
 	ret = readlink(src->ptr, buf, sizeof(buf) - 1);
 	if(ret == -1) {
@@ -481,13 +490,13 @@ static void doDir(stringptr* subd) {
 					restoreTrailingSlash(file_combined_src);
 
 					stringptr *path_combined = stringptr_concat(subd, file, NULL);
-					if(!progstate.simulate && access(file_combined_diff->ptr, R_OK) == -1 && errno == ENOENT) {
+					if(progstate.action == ACT_SYNC && access(file_combined_diff->ptr, R_OK) == -1 && errno == ENOENT) {
 						makeDir(file_combined_diff, &src_stat);
 					}
 					// else updateTimestamp(file_combined_dst, &src_stat);
 					doDir(path_combined);
 					stringptr_free(path_combined);
-					if(!progstate.simulate)
+					if(progstate.action == ACT_SYNC)
 						updateTimestamp(file_combined_diff, &src_stat);
 				} else {
 					if(!progstate.glob || !fnmatch(progstate.glob, file->ptr, 0))
@@ -533,6 +542,7 @@ static int syntax() {
 		"\toptions: -s[imulate] -e[xists] -d[ate] -o[lder] -f[ilesize] -c[hecksum] -w[arn] -v[erbose]\n"
 		"\t-s  : only simulate and print to stdout (dry run)\n"
 		"\t      note: will not print symlinks currently\n"
+		"\t-p  : only print filenames of matching source files\n"
 		"\t-e  : copy source files that dont exist on the dest side\n"
 		"\t-f  : copy source files with different filesize\n"
 		"\t-d  : copy source files with newer timestamp (modtime)\n"
@@ -572,7 +582,12 @@ int main (int argc, char** argv) {
 
 	op_init(op, argc, argv);
 
-	progstate.simulate = op_hasflag(op, SPL("s")) || op_hasflag(op, SPL("simulate"));
+	progstate.action = ACT_SYNC;
+
+	if(op_hasflag(op, SPL("s")) || op_hasflag(op, SPL("simulate")))
+		progstate.action = ACT_SIMULATE_SYNC;
+	if(op_hasflag(op, SPL("p")) || op_hasflag(op, SPL("print")))
+		progstate.action = ACT_PRINT;
 
 	progstate.checkExists = op_hasflag(op, SPL("e")) || op_hasflag(op, SPL("exists"));
 	progstate.checkFileSize = op_hasflag(op, SPL("f")) || op_hasflag(op, SPL("filesize"));
@@ -629,7 +644,7 @@ int main (int argc, char** argv) {
 
 	doDir(isdir(progstate.srcdir) ? SPL("") : SPL("/"));
 
-	printStats(mspassed(&starttime));
+	if(progstate.action != ACT_PRINT) printStats(mspassed(&starttime));
 
 	if(freedst) stringptr_free(progstate.dstdir);
 	if(freediff) stringptr_free(progstate.diffdir);
