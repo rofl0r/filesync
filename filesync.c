@@ -22,6 +22,7 @@
 #define _XOPEN_SOURCE 700
 #include "../lib/include/timelib.h"
 #include "../lib/include/filelist.h"
+#include "../lib/include/stringptrlist.h"
 #include "../lib/include/filelib.h"
 #include "../lib/include/strlib.h"
 #include "../lib/include/logger.h"
@@ -65,6 +66,7 @@ typedef struct {
 	stringptr* dstdir;
 	stringptr diffdir_b;
 	stringptr* diffdir;
+	stringptrlist* excludes;
 	char* glob;
 	char* script;
 
@@ -463,6 +465,9 @@ static void doDir(stringptr* subd) {
 	stringptr *combined_dst = stringptr_concat(progstate.dstdir, subd, NULL);
 	stringptr *combined_diff = stringptr_concat(progstate.diffdir, subd, NULL);
 
+	if(progstate.excludes && stringptrlist_contains(progstate.excludes, combined_src))
+		goto cleanup;
+
 	struct stat src_stat;
 
 	if(!filelist_search(&f, combined_src, SPL("*"), FLF_EXCLUDE_PATH | FLF_INCLUDE_HIDDEN)) {
@@ -512,6 +517,7 @@ static void doDir(stringptr* subd) {
 		log_put(2, VARISL("glob error: "), VARIS(combined_src), NULL);
 	}
 
+cleanup:
 	stringptr_free(combined_src);
 	stringptr_free(combined_dst);
 	stringptr_free(combined_diff);
@@ -556,6 +562,10 @@ static int syntax() {
 		"\t--script=./foo.sh execute ./foo.sh to decide if files differ\n"
 		"      the script will get passed both filenames and must return\n"
 		"      true when they are equal, false if not\n\n"
+		"\t--exclude=... : colon-separated list of src directories to exclude\n"
+		"      the directories must end with a slash, and must start identical\n"
+		"      to the srcdir parameter (e.g. './foo/' if srcdir is '.')\n"
+		"      files in excluded dirs are exempt from the 'skipped' statistics.\n"
 		"filesync will always use the rule that has the least\n"
 		"runtime cost, e.g. a CRC-check will only be done\n"
 		"if the file has the same size and modtime, if filesize check\n"
@@ -617,6 +627,16 @@ int main (int argc, char** argv) {
 	progstate.dstdir = stringptr_fromchar(argv[startarg+1], &progstate.dstdir_b);
 	progstate.diffdir = stringptr_fromchar((dirargs == 3) ? argv[startarg+2] : argv[startarg+1], &progstate.diffdir_b);
 
+	progstate.excludes = 0;
+	{
+		char *exc = op_get(op, SPL("exclude"));
+		if(exc) {
+			stringptr tmp;
+			stringptr_fromchar(exc, &tmp);
+			progstate.excludes = stringptr_splitc(&tmp, ':');
+		}
+	}
+
 	if(access(progstate.diffdir->ptr, R_OK) == -1) {
 		if(errno == ENOENT) {
 			if(stat(progstate.srcdir->ptr, &src_stat) == -1) {
@@ -650,6 +670,7 @@ int main (int argc, char** argv) {
 
 	if(freedst) stringptr_free(progstate.dstdir);
 	if(freediff) stringptr_free(progstate.diffdir);
+	if(progstate.excludes) stringptrlist_free(progstate.excludes);
 
 	return 0;
 }
