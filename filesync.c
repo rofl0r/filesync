@@ -509,7 +509,7 @@ static void doDir(stringptr* subd) {
 		}
 		filelist_free(&f);
 	} else {
-		log_perror("glob");
+		log_put(2, VARISL("glob error: "), VARIS(combined_src), NULL);
 	}
 
 	stringptr_free(combined_src);
