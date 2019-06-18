@@ -24,19 +24,19 @@ clean:
 	rm -f $(FNAME).rcb
 
 optimized:
-	CFLAGS="${CFLAGS_RCB_OPT} -s" rcb --force $(RCBFLAGS) ${MAINFILE} $(LINKLIBS)
+	CFLAGS="${CFLAGS_RCB_OPT} -s" rcb2 $(RCBFLAGS) ${MAINFILE} $(LINKLIBS)
 	strip --remove-section .comment ${OUTFILE}
 
 optimized-aggressive:
-	CFLAGS="${CFLAGS_RCB_OPT_AGGRESSIVE} -s" rcb --force $(RCBFLAGS) ${MAINFILE} $(LINKLIBS)
+	CFLAGS="${CFLAGS_RCB_OPT_AGGRESSIVE} -s" rcb2 $(RCBFLAGS) ${MAINFILE} $(LINKLIBS)
 	strip --remove-section .comment ${OUTFILE}
 
 odebug:
-	CFLAGS="${CFLAGS_RCB_OPT} -g" rcb --force $(RCBFLAGS) ${MAINFILE} $(LINKLIBS)
+	CFLAGS="${CFLAGS_RCB_OPT} -g" rcb2 $(RCBFLAGS) ${MAINFILE} $(LINKLIBS)
 	debug-stripper.sh $(OUTFILE)
 
 debug:
-	CFLAGS="${CFLAGS_RCB_DBG}" rcb --force $(RCBFLAGS) ${MAINFILE} $(LINKLIBS)
+	CFLAGS="${CFLAGS_RCB_DBG}" rcb2 $(RCBFLAGS) ${MAINFILE} $(LINKLIBS)
 
 
 .PHONY: all optimized optimized-aggressive debug odebug

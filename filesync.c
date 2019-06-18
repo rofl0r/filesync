@@ -43,7 +43,7 @@
 
 typedef unsigned long long ull;
 
-//RcB: LINK "-lpthread"
+#pragma RcB2 LINK "-lpthread"
 
 enum action {
 	ACT_SYNC = 1,
