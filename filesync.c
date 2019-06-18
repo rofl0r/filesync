@@ -591,19 +591,31 @@ static int syntax() {
 	return 1;
 }
 
-static stringptrlist* setup_excludes(stringptrlist *dirs) {
-	stringptrlist *ret = stringptrlist_new(stringptrlist_getsize(dirs));
+static stringptrlist* setup_excludes(stringptrlist *dirs, stringptr *base) {
+	stringptrlist *ret = progstate.excludes;
+	if(!ret) ret = stringptrlist_new(stringptrlist_getsize(dirs));
 	stringptr *curr;
 	sblist_iter(dirs, curr) {
-		char resolv[PATH_MAX];
-		if(realpath(curr->ptr, resolv)) {
+		char dir[PATH_MAX], resolv[PATH_MAX];
+		snprintf(dir, sizeof dir, "%s%s%s", stringptr_get(base), stringptr_getsize(base) ? "/" : "", stringptr_get(curr));
+		if(realpath(dir, resolv)) {
 			stringptrlist_add(ret, resolv, strlen(resolv));
 		} else {
-			ulz_fprintf(2, "warning: couldn't resolve exclude path %s (%s)\n", curr->ptr, strerror(errno));
+			ulz_fprintf(2, "warning: couldn't resolve exclude path %s (%s)\n", dir, strerror(errno));
 		}
 	}
 	stringptrlist_free(dirs);
+	progstate.excludes = ret;
 	return ret;
+}
+
+static void read_exclude_file(stringptr *base) {
+	char fn[PATH_MAX];
+	snprintf(fn, sizeof fn, "%s/.filesync-exclude.conf", stringptr_get(base));
+	stringptr *fc = stringptr_fromfile(fn);
+	if(!fc) return;
+	stringptrlist *lines = stringptr_splitc(fc, '\n');
+	setup_excludes(lines, base);
 }
 
 int main (int argc, char** argv) {
@@ -658,7 +670,7 @@ int main (int argc, char** argv) {
 		if(exc) {
 			stringptr tmp;
 			stringptr_fromchar(exc, &tmp);
-			progstate.excludes = setup_excludes(stringptr_splitc(&tmp, ':'));
+			setup_excludes(stringptr_splitc(&tmp, ':'), SPL(""));
 		}
 	}
 
@@ -684,6 +696,9 @@ int main (int argc, char** argv) {
 		progstate.diffdir = stringptr_concat(progstate.diffdir, SPL("/"), NULL);
 		freediff = 1;
 	}
+
+	read_exclude_file(progstate.srcdir);
+	read_exclude_file(progstate.dstdir);
 
 	gettimestamp(&starttime);
 
