@@ -591,22 +591,23 @@ static int syntax() {
 	return 1;
 }
 
-static stringptrlist* setup_excludes(stringptrlist *dirs, stringptr *base) {
+static void setup_excludes(stringptrlist *dirs, stringptr *base) {
 	stringptrlist *ret = progstate.excludes;
 	if(!ret) ret = stringptrlist_new(stringptrlist_getsize(dirs));
 	stringptr *curr;
 	sblist_iter(dirs, curr) {
+		if(!stringptr_getsize(curr)) continue; // skip empty line (would result in base added)
 		char dir[PATH_MAX], resolv[PATH_MAX];
 		snprintf(dir, sizeof dir, "%s%s%s", stringptr_get(base), stringptr_getsize(base) ? "/" : "", stringptr_get(curr));
 		if(realpath(dir, resolv)) {
-			stringptrlist_add(ret, resolv, strlen(resolv));
+			SPDECLAREC(tmp, resolv);
+			stringptrlist_add_strdup(ret, tmp);
 		} else {
 			ulz_fprintf(2, "warning: couldn't resolve exclude path %s (%s)\n", dir, strerror(errno));
 		}
 	}
 	stringptrlist_free(dirs);
 	progstate.excludes = ret;
-	return ret;
 }
 
 static void read_exclude_file(stringptr *base) {
