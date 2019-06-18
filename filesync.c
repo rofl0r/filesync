@@ -40,6 +40,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <assert.h>
+#include <limits.h>
 
 typedef unsigned long long ull;
 
@@ -459,13 +460,22 @@ static void doLink(stringptr* src, stringptr* dst, struct stat* ss) {
 	progstate.total.symlink += 1;
 }
 
+static int excludelist_contains(stringptr* dir) {
+	char resolv[PATH_MAX];
+	if(!progstate.excludes) return 0;
+	if(!realpath(dir->ptr, resolv)) return 0;
+	stringptr temp, *t;
+	t = stringptr_fromchar(resolv, &temp);
+	return stringptrlist_contains(progstate.excludes, t);
+}
+
 static void doDir(stringptr* subd) {
 	filelist f;
 	stringptr *combined_src = stringptr_concat(progstate.srcdir, subd, NULL);
 	stringptr *combined_dst = stringptr_concat(progstate.dstdir, subd, NULL);
 	stringptr *combined_diff = stringptr_concat(progstate.diffdir, subd, NULL);
 
-	if(progstate.excludes && stringptrlist_contains(progstate.excludes, combined_src))
+	if(excludelist_contains(combined_src) || excludelist_contains(combined_dst))
 		goto cleanup;
 
 	struct stat src_stat;
@@ -581,6 +591,21 @@ static int syntax() {
 	return 1;
 }
 
+static stringptrlist* setup_excludes(stringptrlist *dirs) {
+	stringptrlist *ret = stringptrlist_new(stringptrlist_getsize(dirs));
+	stringptr *curr;
+	sblist_iter(dirs, curr) {
+		char resolv[PATH_MAX];
+		if(realpath(curr->ptr, resolv)) {
+			stringptrlist_add(ret, resolv, strlen(resolv));
+		} else {
+			ulz_fprintf(2, "warning: couldn't resolve exclude path %s (%s)\n", curr->ptr, strerror(errno));
+		}
+	}
+	stringptrlist_free(dirs);
+	return ret;
+}
+
 int main (int argc, char** argv) {
 
 	if(argc < 4) return syntax();
@@ -633,7 +658,7 @@ int main (int argc, char** argv) {
 		if(exc) {
 			stringptr tmp;
 			stringptr_fromchar(exc, &tmp);
-			progstate.excludes = stringptr_splitc(&tmp, ':');
+			progstate.excludes = setup_excludes(stringptr_splitc(&tmp, ':'));
 		}
 	}
 
