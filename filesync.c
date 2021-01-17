@@ -82,6 +82,7 @@ typedef struct {
 	int checkDateOlder:1;
 	int verbose:1;
 	int warnNewer:1;
+	int excludefile:1;
 } progstate_s;
 
 static progstate_s progstate;
@@ -575,7 +576,14 @@ static int syntax() {
 		"\t--exclude=... : colon-separated list of src directories to exclude\n"
 		"      the directories must end with a slash, and must start identical\n"
 		"      to the srcdir parameter (e.g. './foo/' if srcdir is '.')\n"
-		"      files in excluded dirs are exempt from the 'skipped' statistics.\n"
+		"      files in excluded dirs are exempt from the 'skipped' statistics.\n\n"
+		"\t--exclude-file: enables support for directory-specific exclude file:\n"
+		"      if on either src or dst side a file .filesync-exclude.conf is\n"
+		"      encountered, its contents (line-based) will be interpreted as\n"
+		"      paths relative from the directory containing it, and be excluded\n"
+		"      from the sync process.\n"
+		"      when using the option, check before every sync whether such a file exists and contents are relevant!\n\n"
+
 		"filesync will always use the rule that has the least\n"
 		"runtime cost, e.g. a CRC-check will only be done\n"
 		"if the file has the same size and modtime, if filesize check\n"
@@ -615,6 +623,8 @@ static void read_exclude_file(stringptr *base) {
 	snprintf(fn, sizeof fn, "%s/.filesync-exclude.conf", stringptr_get(base));
 	stringptr *fc = stringptr_fromfile(fn);
 	if(!fc) return;
+	if(progstate.verbose)
+		ulz_fprintf(2, "processing exclude file: %s\n", fn);
 	stringptrlist *lines = stringptr_splitc(fc, '\n');
 	setup_excludes(lines, base);
 }
@@ -648,6 +658,7 @@ int main (int argc, char** argv) {
 	progstate.verbose = op_hasflag(op, SPL("v")) || op_hasflag(op, SPL("verbose"));
 	progstate.glob = op_get(op, SPL("glob"));
 	progstate.script = op_get(op, SPL("script"));
+	progstate.excludefile = op_hasflag(op, SPL("exclude-file"));
 
 	for(i = 1; i < argc; i++)
 		if(argv[i][0] != '-') dirargs++;
@@ -698,8 +709,10 @@ int main (int argc, char** argv) {
 		freediff = 1;
 	}
 
-	read_exclude_file(progstate.srcdir);
-	read_exclude_file(progstate.dstdir);
+	if(progstate.excludefile) {
+		read_exclude_file(progstate.srcdir);
+		read_exclude_file(progstate.dstdir);
+	}
 
 	gettimestamp(&starttime);
 
