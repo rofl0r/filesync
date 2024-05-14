@@ -154,7 +154,7 @@ static int get_crc_and_copy(stringptr* src, stringptr* dst, struct stat *src_sta
 
 	uint64_t done = 0;
 	CRC32C_CTX crc;
-	char buf[src_stat->st_blksize];
+	char buf[64*1024];
 
 	if(S_ISFIFO(src_stat->st_mode)) {
 		crc_result->asInt = 0;
@@ -196,7 +196,7 @@ static int get_crc_and_copy(stringptr* src, stringptr* dst, struct stat *src_sta
 
 	CRC32C_Init(&crc);
 	while(done < (uint64_t) src_stat->st_size) {
-		ssize_t nread = read(fds, buf, src_stat->st_blksize);
+		ssize_t nread = read(fds, buf, sizeof buf);
 		if(nread == -1) {
 			err_data = src;
 			err_func = "read";
