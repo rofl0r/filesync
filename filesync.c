@@ -119,13 +119,15 @@ static void updateTimestamp(stringptr* dst, struct stat* ss) {
 	if(wasdir) restoreTrailingSlash(dst);
 }
 
-static void makeDir(stringptr* dst, struct stat* ss) {
+static int makeDir(stringptr* dst, struct stat* ss) {
 	if(progstate.action != ACT_SYNC)
-		return;
+		return 1;
 	if(mkdir(dst->ptr, ss->st_mode) == -1) {
 		log_perror("mkdir");
-		return;
+		if(errno == ENOSPC) return -1;
+		return 0;
 	}
+	return 1;
 }
 
 static char* getMbsString(char* mbs_buf, size_t buf_size, uint64_t bytes, long ms) {
@@ -145,9 +147,9 @@ typedef union {
 } crc_t;
 
 /* if dest is not passed, no copy will be produced
- * returns 1 if successfull, 0 otherwise */
+ * returns 1 if successfull, 0 on recoverable errors, -1 on disk full */
 static int get_crc_and_copy(stringptr* src, stringptr* dst, struct stat *src_stat, crc_t* crc_result) {
-	int fds, fdd = -1;
+	int fds, fdd = -1, diskfull = 0;
 	int errclose;
 	stringptr* err_data;
 	char* err_func;
@@ -173,7 +175,7 @@ static int get_crc_and_copy(stringptr* src, stringptr* dst, struct stat *src_sta
 		errclose = 0;
 
 		error:
-
+		if(errno == ENOSPC) diskfull = 1;
 		log_puts(2, err_data);
 		log_puts(2, SPL(" "));
 		log_perror(err_func);
@@ -185,14 +187,14 @@ static int get_crc_and_copy(stringptr* src, stringptr* dst, struct stat *src_sta
 				errclose--;
 			}
 		}
-		return 0;
-	};
+		return diskfull ? -1 : 0;
+	}
 	if(dst && (fdd = open(dst->ptr, O_WRONLY | O_CREAT | O_TRUNC, src_stat->st_mode)) == -1) {
 		err_data = dst;
 		errclose = 1;
 		err_func = "open";
 		goto error;
-	};
+	}
 
 	CRC32C_Init(&crc);
 	while(done < (uint64_t) src_stat->st_size) {
@@ -228,7 +230,8 @@ static int get_crc_and_copy(stringptr* src, stringptr* dst, struct stat *src_sta
 	return 1;
 }
 
-static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat, char* reason) {
+static int doSync(stringptr* src, stringptr* dst, struct stat *src_stat, char* reason) {
+	int copyret;
 	crc_t crc_result;
 	struct timeval starttime;
 	long time_passed;
@@ -239,16 +242,16 @@ static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat, char* 
 		goto stats;
 	} else if(progstate.action == ACT_PRINT) {
 		log_put(1, VARIS(src), NULL);
-		return;
+		return 1;
 	}
 
 	gettimestamp(&starttime);
 
 	// we always compute the CRC, because it's nearly "for free",
 	// since the file has to be read anyway for the copy.
-	if(!get_crc_and_copy(src, dst, src_stat, &crc_result)) {
+	if((copyret = get_crc_and_copy(src, dst, src_stat, &crc_result)) <= 0) {
 		progstate.total.errors++;
-		return;
+		return copyret;
 	}
 
 	copyDate(dst, src_stat);
@@ -269,6 +272,7 @@ static void doSync(stringptr* src, stringptr* dst, struct stat *src_stat, char* 
 
 	progstate.total.copied += src_stat->st_size;
 	progstate.total.copies += 1;
+	return 1;
 }
 
 typedef struct {
@@ -352,7 +356,7 @@ static int scriptDiffers(stringptr* src, stringptr* dst) {
 	}
 }
 
-static void doFile(stringptr* src, stringptr* dst, stringptr* diff, struct stat* ss) {
+static int doFile(stringptr* src, stringptr* dst, stringptr* diff, struct stat* ss) {
 	struct stat sd;
 	char* reason = "x";
 	if(progstate.verbose) ulz_fprintf(2, "file: %s\n", src->ptr);
@@ -362,9 +366,9 @@ static void doFile(stringptr* src, stringptr* dst, stringptr* diff, struct stat*
 				if(progstate.checkExists) {
 					reason = "e";
 					do_sync:
-					doSync(src, diff, ss, reason);
+					return doSync(src, diff, ss, reason);
 				}
-				return;
+				return 1;
 			default:
 				log_puts(2, dst);
 				log_puts(2, SPL(" "));
@@ -392,6 +396,7 @@ static void doFile(stringptr* src, stringptr* dst, stringptr* diff, struct stat*
 	}
 
 	progstate.total.skipped += 1;
+	return 1;
 }
 
 static void setLinkTimestamp(stringptr* link, struct stat* ss) {
@@ -470,8 +475,9 @@ static int excludelist_contains(stringptr* dir) {
 	return stringptrlist_contains(progstate.excludes, t);
 }
 
-static void doDir(stringptr* subd) {
+static int doDir(stringptr* subd) {
 	filelist f;
+	int ret = 1;
 	stringptr *combined_src = stringptr_concat(progstate.srcdir, subd, NULL);
 	stringptr *combined_dst = stringptr_concat(progstate.dstdir, subd, NULL);
 	stringptr *combined_diff = stringptr_concat(progstate.diffdir, subd, NULL);
@@ -507,21 +513,22 @@ static void doDir(stringptr* subd) {
 
 					stringptr *path_combined = stringptr_concat(subd, file, NULL);
 					if(progstate.action == ACT_SYNC && access(file_combined_diff->ptr, R_OK) == -1 && errno == ENOENT) {
-						makeDir(file_combined_diff, &src_stat);
+						if(makeDir(file_combined_diff, &src_stat) == -1) ret = -1;
 					}
 					// else updateTimestamp(file_combined_dst, &src_stat);
-					doDir(path_combined);
+					if(ret != -1 && doDir(path_combined) == -1) ret = -1;
 					stringptr_free(path_combined);
-					if(progstate.action == ACT_SYNC)
+					if(ret != -1 && progstate.action == ACT_SYNC)
 						updateTimestamp(file_combined_diff, &src_stat);
 				} else {
 					if(!progstate.glob || !fnmatch(progstate.glob, file->ptr, 0))
-						doFile(file_combined_src, file_combined_dst, file_combined_diff, &src_stat);
+						if(doFile(file_combined_src, file_combined_dst, file_combined_diff, &src_stat) == -1) ret = -1;
 				}
 			}
 			stringptr_free(file_combined_src);
 			stringptr_free(file_combined_dst);
 			stringptr_free(file_combined_diff);
+			if(ret == -1) break;
 		}
 		filelist_free(&f);
 	} else {
@@ -532,6 +539,7 @@ cleanup:
 	stringptr_free(combined_src);
 	stringptr_free(combined_dst);
 	stringptr_free(combined_diff);
+	return ret;
 }
 
 static void printStats(long ms) {
@@ -634,7 +642,7 @@ int main (int argc, char** argv) {
 	if(argc < 4) return syntax();
 	int startarg = 1;
 	int freedst = 0, freediff = 0;
-	int dirargs = 0, i;
+	int dirargs = 0, i, ret = 0;
 	struct timeval starttime;
 	struct stat src_stat;
 
@@ -718,7 +726,11 @@ int main (int argc, char** argv) {
 
 	CRC32C_InitTables();
 
-	doDir(isdir(progstate.srcdir) ? SPL("") : SPL("/"));
+	if(doDir(isdir(progstate.srcdir) ? SPL("") : SPL("/")) == -1) {
+		// TODO: also return error if other errors happened ?
+		log_puts(2, SPL("FATAL: disk full, premature termination!\n"));
+		ret = 1;
+	}
 
 	if(progstate.action != ACT_PRINT) printStats(mspassed(&starttime));
 
@@ -726,5 +738,5 @@ int main (int argc, char** argv) {
 	if(freediff) stringptr_free(progstate.diffdir);
 	if(progstate.excludes) stringptrlist_free(progstate.excludes);
 
-	return 0;
+	return ret;
 }
